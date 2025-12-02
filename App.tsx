@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TRANSLATIONS, ANIMALS, AVATAR_COLORS } from './constants';
 import { Player, GameConfig, GameSession, Language, Theme, SessionPlayer, SettlementResult } from './types';
 import * as Storage from './services/storageService';
@@ -7,7 +7,7 @@ import { Icon } from './components/Icon';
 import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 
-// --- Sub-components (Inline for single file requirement structure within reason, but logically separated) ---
+// --- Sub-components ---
 
 const PlayerAvatar = ({ player, size = 'md' }: { player: Player | undefined, size?: 'sm' | 'md' | 'lg' }) => {
   if (!player) return <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse" />;
@@ -15,7 +15,7 @@ const PlayerAvatar = ({ player, size = 'md' }: { player: Player | undefined, siz
   const sizes = { sm: 'w-8 h-8 text-sm', md: 'w-12 h-12 text-xl', lg: 'w-20 h-20 text-4xl' };
   
   return (
-    <div className={`${sizes[size]} rounded-full flex items-center justify-center shadow-inner ${player.avatarColor}`}>
+    <div className={`${sizes[size]} shrink-0 rounded-full flex items-center justify-center shadow-inner ${player.avatarColor}`}>
       {player.avatar}
     </div>
   );
@@ -125,15 +125,11 @@ const SetupScreen = ({
   const handleQuickAdd = () => {
     if (newPlayerName.trim()) {
       onCreatePlayer(newPlayerName.trim());
-      // Auto select the new player (we assume the parent adds it to the list immediately)
-      // Since players prop will update, we can't get the ID instantly here easily without refactoring, 
-      // but typically the list updates. We'll leave auto-select for now or clear name.
       setNewPlayerName('');
       setShowAddPlayer(false);
     }
   };
   
-  // Use history
   const loadConfig = (c: GameConfig) => {
     setBuyIn(c.buyInAmount.toString());
     setRatio(c.chipRatio.toString());
@@ -297,14 +293,32 @@ const ActiveGameScreen = ({
     setCustomAmount('');
   };
 
+  const handleEndGameClick = () => {
+    // Validation: All players must be cashed out
+    const unfinished = activePlayers.some(p => p.cashOut === null);
+    if (unfinished) {
+      alert(t.game.settleError);
+      return;
+    }
+    onEndGame();
+  };
+
   return (
     <div className="space-y-6 pb-20">
-      <div className="bg-white/50 dark:bg-zinc-900/50 backdrop-blur-md sticky top-0 z-10 py-4 -mx-4 px-4 border-b border-gray-200 dark:border-zinc-800 flex justify-between items-center">
+      <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md sticky top-0 z-10 py-4 -mx-4 px-4 border-b border-gray-200 dark:border-zinc-800 shadow-sm flex justify-between items-center">
         <div>
            <div className="text-xs uppercase text-gray-500 font-bold">{t.game.totalPot}</div>
            <div className="text-3xl font-black text-gray-900 dark:text-white font-mono">{totalPot.toLocaleString()}</div>
+           <div className="text-[10px] text-gray-400 font-medium tracking-wide">
+             {t.game.configInfo.replace('{buyIn}', session.config.buyInAmount).replace('{ratio}', session.config.chipRatio)}
+           </div>
         </div>
-        <Button size="sm" variant="danger" onClick={onEndGame}>{t.game.endGame}</Button>
+        <button 
+          onClick={handleEndGameClick}
+          className="bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition-all font-bold px-4 py-2 rounded-xl text-sm shadow-lg shadow-indigo-600/20"
+        >
+          {t.game.endGame}
+        </button>
       </div>
 
       <div className="space-y-4">
@@ -319,7 +333,9 @@ const ActiveGameScreen = ({
                 <div className="flex-1">
                   <div className="font-bold text-lg dark:text-white">{p.details?.name}</div>
                   <div className="text-xs font-mono text-gray-500">
-                     IN: {invested} {isCashedOut && <span className="text-green-600 font-bold"> | OUT: {p.cashOut}</span>}
+                     {/* Show Hands Count and Total Chip Value */}
+                     IN: {p.buyInCount} {t.game.hands} ({invested}) {p.extraBuyIn > 0 && `+ ${p.extraBuyIn}`}
+                     {isCashedOut && <span className="text-green-600 font-bold"> | OUT: {p.cashOut}</span>}
                   </div>
                 </div>
                 {isCashedOut ? (
@@ -336,19 +352,19 @@ const ActiveGameScreen = ({
                     disabled={p.buyInCount === 0}
                     className="flex-1 h-10 rounded-lg bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-gray-300 font-bold disabled:opacity-30"
                    >
-                     -1
+                     {t.game.subBuyIn}
                    </button>
                    <button 
                     onClick={() => handleQuickBuyIn(p.playerId, 1)}
                     className="flex-2 w-1/3 h-10 rounded-lg bg-swiss-red/10 dark:bg-poker-orange/10 text-swiss-red dark:text-poker-orange font-bold border border-swiss-red/20 dark:border-poker-orange/20"
                    >
-                     +1 ({session.config.buyInAmount})
+                     {t.game.addBuyIn}
                    </button>
                    <button 
                     onClick={() => openCustom(p, 'buyIn')}
                     className="flex-1 h-10 rounded-lg bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-gray-300 font-bold text-xs"
                    >
-                     ...
+                     {t.game.customBuyIn}
                    </button>
                 </div>
               )}
@@ -390,6 +406,8 @@ const SettlementScreen = ({
   onClose: () => void, 
   t: any 
 }) => {
+  const contentRef = useRef<HTMLDivElement>(null);
+
   const settlement = useMemo(() => {
     let totalBuyIn = 0;
     let totalCashOut = 0;
@@ -406,7 +424,7 @@ const SettlementScreen = ({
         totalBuyIn: invested,
         cashOut: out,
         rawProfit: out - invested,
-        adjustedProfit: 0, // to be calc
+        adjustedProfit: 0,
         adjustment: 0,
         shareRatio: 0
       });
@@ -414,125 +432,145 @@ const SettlementScreen = ({
 
     const discrepancy = totalCashOut - totalBuyIn;
 
-    // Logic: 
-    // If Discrepancy < 0 (Shortage): Winners (water-above) share the loss proportionally to their winnings.
-    // If Discrepancy > 0 (Surplus): Losers (water-below) share the gain proportionally to their losses.
-    
-    // First, categorize
     const winners = results.filter(r => r.rawProfit > 0);
     const losers = results.filter(r => r.rawProfit < 0);
-    const breakEven = results.filter(r => r.rawProfit === 0);
-
-    // Initial assignment
+    
+    // Initial
     results.forEach(r => r.adjustedProfit = r.rawProfit);
 
     if (Math.abs(discrepancy) > 0.01) {
-      if (discrepancy < 0) {
-        // Shortage: Winners pay.
+      if (discrepancy > 0) {
+        // Shortage (差钱): CashOut > BuyIn. Winners share the burden.
         const totalWinnings = winners.reduce((sum, w) => sum + w.rawProfit, 0);
         if (totalWinnings > 0) {
           winners.forEach(w => {
             const ratio = w.rawProfit / totalWinnings;
             const share = Math.abs(discrepancy) * ratio;
-            w.adjustment = -share; // Reduction
+            w.adjustment = -share; 
             w.adjustedProfit = w.rawProfit - share;
             w.shareRatio = ratio;
           });
-        } else {
-           // Everyone lost, but shortage? Distribute shortage equally among all to balance ledger.
-           results.forEach(r => {
-             const share = Math.abs(discrepancy) / results.length;
-             r.adjustment = -share;
-             r.adjustedProfit = r.rawProfit - share;
-             r.shareRatio = 1 / results.length;
-           });
         }
       } else {
-        // Surplus: Losers gain.
+        // Surplus (多钱): CashOut < BuyIn. Losers share the refund.
         const totalLosses = losers.reduce((sum, l) => sum + Math.abs(l.rawProfit), 0);
         if (totalLosses > 0) {
           losers.forEach(l => {
              const ratio = Math.abs(l.rawProfit) / totalLosses;
-             const share = discrepancy * ratio;
-             l.adjustment = share; // Addition
+             const share = Math.abs(discrepancy) * ratio;
+             l.adjustment = share; 
              l.adjustedProfit = l.rawProfit + share; 
              l.shareRatio = ratio;
           });
-        } else {
-           // Everyone won, but extra money? Distribute surplus equally.
-           results.forEach(r => {
-             const share = discrepancy / results.length;
-             r.adjustment = share;
-             r.adjustedProfit = r.rawProfit + share;
-             r.shareRatio = 1 / results.length;
-           });
         }
       }
     }
     
-    // Sort by profit desc
     results.sort((a, b) => b.adjustedProfit - a.adjustedProfit);
 
     return { totalBuyIn, totalCashOut, discrepancy, results };
   }, [session, players]);
 
+  const handleShare = async () => {
+    if (!contentRef.current) return;
+    try {
+      // Use html2canvas to create image
+      const canvas = await (window as any).html2canvas(contentRef.current, {
+        backgroundColor: document.documentElement.classList.contains('dark') ? '#1E1E1E' : '#F5F5F5',
+        scale: 2
+      });
+      
+      canvas.toBlob(async (blob: Blob | null) => {
+        if (!blob) return;
+        const file = new File([blob], "poker_settlement.png", { type: "image/png" });
+        
+        // Try native share
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+             await navigator.share({
+               files: [file],
+               title: 'Poker Settlement',
+               text: 'Check out the game results!'
+             });
+          } catch (err) {
+            console.error('Share failed', err);
+          }
+        } else {
+          // Fallback: Show image in new tab or modal (Simplest: Download)
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'poker_settlement.png';
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      });
+    } catch (e) {
+      console.error("Screenshot failed", e);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div className={`p-6 rounded-2xl ${Math.abs(settlement.discrepancy) < 1 ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400' : 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-400'}`}>
-        <div className="flex justify-between items-center mb-2">
-           <span className="font-bold uppercase tracking-wider text-xs">{t.settlement.ledger}</span>
-           <Icon name={Math.abs(settlement.discrepancy) < 1 ? "CheckCircle" : "AlertTriangle"} size={20} />
+      <div ref={contentRef} className="bg-white dark:bg-poker-darkgray p-4 rounded-xl space-y-6">
+        {/* Header Summary */}
+        <div className={`p-6 rounded-2xl ${Math.abs(settlement.discrepancy) < 1 ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-400' : 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-400'}`}>
+          <div className="flex justify-between items-center mb-2">
+             <span className="font-bold uppercase tracking-wider text-xs">{t.settlement.ledger}</span>
+             <Icon name={Math.abs(settlement.discrepancy) < 1 ? "CheckCircle" : "AlertTriangle"} size={20} />
+          </div>
+          <div className="text-3xl font-black font-mono">
+            {Math.abs(settlement.discrepancy) < 1 ? t.settlement.perfect : (settlement.discrepancy > 0 ? `+${settlement.discrepancy}` : settlement.discrepancy)}
+          </div>
+          <div className="text-sm opacity-80 mt-1">
+            {Math.abs(settlement.discrepancy) < 1 ? 'All chips accounted for.' : (settlement.discrepancy > 0 ? t.settlement.shortage : t.settlement.surplus)}
+          </div>
         </div>
-        <div className="text-3xl font-black font-mono">
-          {Math.abs(settlement.discrepancy) < 1 ? t.settlement.perfect : (settlement.discrepancy > 0 ? `+${settlement.discrepancy}` : settlement.discrepancy)}
-        </div>
-        <div className="text-sm opacity-80 mt-1">
-          {Math.abs(settlement.discrepancy) < 1 ? 'All chips accounted for.' : (settlement.discrepancy > 0 ? t.settlement.surplus : t.settlement.shortage)}
-        </div>
-      </div>
 
-      <div className="space-y-3" id="settlement-list">
-        {settlement.results.map((r) => {
-          const hasAdjustment = Math.abs(r.adjustment || 0) > 0.01;
-          const playerDetails = players.find(p => p.id === r.playerId);
+        {/* List */}
+        <div className="space-y-3">
+          {settlement.results.map((r) => {
+            const hasAdjustment = Math.abs(r.adjustment || 0) > 0.01;
+            const playerDetails = players.find(p => p.id === r.playerId);
 
-          return (
-            <div key={r.playerId} className="flex items-center justify-between p-4 bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl shadow-sm">
-               <div className="flex items-center gap-3">
-                 <PlayerAvatar player={playerDetails} size="sm" />
-                 <span className="font-bold text-gray-900 dark:text-white">{r.playerName}</span>
-               </div>
-               <div className="text-right">
-                  <div className={`text-lg font-black font-mono ${r.adjustedProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {r.adjustedProfit > 0 ? '+' : ''}{Math.round(r.adjustedProfit)}
-                  </div>
-                  
-                  {hasAdjustment && (
-                    <div className="flex flex-col items-end text-[10px] text-gray-500 font-mono mt-1">
-                      <div>
-                        {t.settlement.details.raw}: {r.rawProfit > 0 ? '+' : ''}{Math.round(r.rawProfit)}
-                      </div>
-                      <div>
-                         {t.settlement.details.diff}: {r.adjustment! > 0 ? '+' : ''}{Math.round(r.adjustment!)} | {t.settlement.details.ratio}: {Math.round((r.shareRatio || 0) * 100)}%
-                      </div>
+            return (
+              <div key={r.playerId} className="flex items-center justify-between p-4 bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl shadow-sm">
+                 <div className="flex items-center gap-3">
+                   <PlayerAvatar player={playerDetails} size="sm" />
+                   <span className="font-bold text-gray-900 dark:text-white">{r.playerName}</span>
+                 </div>
+                 <div className="text-right">
+                    {/* Primary Amount: Always show the final adjusted profit clearly */}
+                    <div className={`text-xl font-black font-mono ${r.adjustedProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {r.adjustedProfit > 0 ? '+' : ''}{Math.round(r.adjustedProfit)}
                     </div>
-                  )}
-               </div>
-            </div>
-          );
-        })}
+                    
+                    {/* Adjustment Details: Only if adjusted */}
+                    {hasAdjustment && (
+                      <div className="flex flex-col items-end text-[10px] text-gray-500 font-mono mt-1 opacity-80">
+                         <div className="flex gap-2">
+                            <span>{t.settlement.details.raw}: {Math.round(r.rawProfit)}</span>
+                            <span>|</span>
+                            <span>{t.settlement.details.diff}: {r.adjustment! > 0 ? '+' : ''}{Math.round(r.adjustment!)}</span>
+                            <span>|</span>
+                            <span>{t.settlement.details.ratio}: {Math.round((r.shareRatio || 0) * 100)}%</span>
+                         </div>
+                      </div>
+                    )}
+                 </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
       
       <div className="pt-4 space-y-3">
-        <Button variant="primary" fullWidth onClick={() => window.print()}>
+        <Button variant="primary" fullWidth onClick={handleShare}>
            <Icon name="Share2" className="mr-2" size={18} /> {t.settlement.shareImage}
         </Button>
         <Button variant="ghost" fullWidth onClick={onClose}>
            {t.settlement.backToHome}
         </Button>
-        <p className="text-center text-xs text-gray-400">
-           Tip: Use system screenshot or print to PDF to share.
-        </p>
       </div>
     </div>
   );
@@ -622,12 +660,6 @@ export default function App() {
 
   const handleEndGame = () => {
     if (!activeSession) return;
-    
-    // Auto-fill cashout for active players as 0 if they haven't set it? 
-    // Or prompt? Prompt is better, but for MVP speed, let's assume if they click End, 
-    // we want to go to settlement, and anyone with null cashout is treated as 0 or needs input.
-    // Better UX: Don't allow end until everyone has cashout value.
-    // For this version: We'll force remaining nulls to 0 and go to settlement.
     
     const finalizedPlayers = activeSession.players.map(p => ({
       ...p,
